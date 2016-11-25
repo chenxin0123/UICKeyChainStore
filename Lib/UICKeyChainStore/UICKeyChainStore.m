@@ -17,6 +17,7 @@ static NSString *_defaultService;
 
 @implementation UICKeyChainStore
 
+/// kSecAttrService默认值
 + (NSString *)defaultService
 {
     if (!_defaultService) {
@@ -90,7 +91,7 @@ static NSString *_defaultService;
 }
 
 #pragma mark -
-
+/// Support Shared Web Credentials
 - (instancetype)initWithServer:(NSURL *)server protocolType:(UICKeyChainStoreProtocolType)protocolType
 {
     return [self initWithServer:server protocolType:protocolType authenticationType:UICKeyChainStoreAuthenticationTypeDefault];
@@ -119,8 +120,7 @@ static NSString *_defaultService;
     _accessibility = UICKeyChainStoreAccessibilityAfterFirstUnlock;
 }
 
-#pragma mark -
-
+#pragma mark - 类方法 新建一个UICKeyChainStore实例来获取
 + (NSString *)stringForKey:(NSString *)key
 {
     return [self stringForKey:key service:nil accessGroup:nil error:nil];
@@ -220,6 +220,7 @@ static NSString *_defaultService;
     return [self setString:value forKey:key service:service accessGroup:accessGroup genericAttribute:genericAttribute error:nil];
 }
 
+/// value为空表示移除
 + (BOOL)setString:(NSString *)value forKey:(NSString *)key service:(NSString *)service accessGroup:(NSString *)accessGroup genericAttribute:(id)genericAttribute error:(NSError * __autoreleasing *)error
 {
     if (!value) {
@@ -445,6 +446,8 @@ static NSString *_defaultService;
     return [self dataForKey:key error:nil];
 }
 
+/// kSecMatchLimit:kSecMatchLimitOne
+/// kSecReturnData:kCFBooleanTrue
 - (NSData *)dataForKey:(NSString *)key error:(NSError *__autoreleasing *)error
 {
     NSMutableDictionary *query = [self query];
@@ -511,6 +514,9 @@ static NSString *_defaultService;
     return [self setData:data forKey:key genericAttribute:nil label:label comment:comment error:error];
 }
 
+/// data为nil表示移除
+/// kSecAttrAccount:key
+
 - (BOOL)setData:(NSData *)data forKey:(NSString *)key genericAttribute:(id)genericAttribute label:(NSString *)label comment:(NSString *)comment error:(NSError *__autoreleasing *)error
 {
     if (!key) {
@@ -526,6 +532,7 @@ static NSString *_defaultService;
     
     NSMutableDictionary *query = [self query];
     query[(__bridge __strong id)kSecAttrAccount] = key;
+    // Disallow user authentication.
 #if TARGET_OS_IOS
     if (floor(NSFoundationVersionNumber) > floor(1144.17)) { // iOS 9+
         query[(__bridge __strong id)kSecUseAuthenticationUI] = (__bridge id)kSecUseAuthenticationUIFail;
@@ -546,12 +553,15 @@ static NSString *_defaultService;
         NSError *unexpectedError = nil;
         NSMutableDictionary *attributes = [self attributesWithKey:nil value:data error:&unexpectedError];
         
+        // Items of class kSecClassGenericPassword have this attribute.
         if (genericAttribute) {
             attributes[(__bridge __strong id)kSecAttrGeneric] = genericAttribute;
         }
+        // The corresponding value is of type CFStringRef and contains the user-visible label for this item.
         if (label) {
             attributes[(__bridge __strong id)kSecAttrLabel] = label;
         }
+        // The corresponding value is of type CFStringRef and contains the user-editable comment for this item.
         if (comment) {
             attributes[(__bridge __strong id)kSecAttrComment] = comment;
         }
@@ -564,11 +574,13 @@ static NSString *_defaultService;
             return NO;
         } else {
             
+            // 移除再添加
             if (status == errSecInteractionNotAllowed && floor(NSFoundationVersionNumber) <= floor(1140.11)) { // iOS 8.0.x
                 if ([self removeItemForKey:key error:error]) {
                     return [self setData:data forKey:key label:label comment:comment error:error];
                 }
             } else {
+                // 更新
                 status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)attributes);
             }
             if (status != errSecSuccess) {
@@ -580,6 +592,7 @@ static NSString *_defaultService;
             }
         }
     } else if (status == errSecItemNotFound) {
+        // 添加
         NSError *unexpectedError = nil;
         NSMutableDictionary *attributes = [self attributesWithKey:key value:data error:&unexpectedError];
         
@@ -704,6 +717,7 @@ static NSString *_defaultService;
     return [self removeItemForKey:key error:nil];
 }
 
+/// SecItemDelete
 - (BOOL)removeItemForKey:(NSString *)key error:(NSError *__autoreleasing *)error
 {
     NSMutableDictionary *query = [self query];
@@ -728,6 +742,7 @@ static NSString *_defaultService;
     return [self removeAllItemsWithError:nil];
 }
 
+/// SecItemDelete
 - (BOOL)removeAllItemsWithError:(NSError *__autoreleasing *)error
 {
     NSMutableDictionary *query = [self query];
@@ -748,7 +763,7 @@ static NSString *_defaultService;
 }
 
 #pragma mark -
-
+/// []
 - (NSString *)objectForKeyedSubscript:(NSString <NSCopying> *)key
 {
     return [self stringForKey:key];
@@ -778,6 +793,8 @@ static NSString *_defaultService;
     return keys.copy;
 }
 
+/// Return NSArray<dic>
+/// dic : keys(service,key)
 + (NSArray UIC_KEY_TYPE *)allKeysWithItemClass:(UICKeyChainStoreItemClass)itemClass
 {
     CFTypeRef itemClassObject = kSecClassGenericPassword;
@@ -872,6 +889,7 @@ static NSString *_defaultService;
     return nil;
 }
 
+/// 将keyChain字典的键转为更加直观的键
 + (NSArray *)prettify:(CFTypeRef)itemClass items:(NSArray *)items
 {
     NSMutableArray *prettified = [[NSMutableArray alloc] init];
@@ -955,6 +973,7 @@ static NSString *_defaultService;
 #pragma mark -
 
 #if TARGET_OS_IOS
+/// Support Shared Web Credentials
 - (void)sharedPasswordWithCompletion:(void (^)(NSString *account, NSString *password, NSError *error))completion
 {
     NSString *domain = self.server.host;
@@ -1006,10 +1025,12 @@ static NSString *_defaultService;
     }
 }
 
+/// Asynchronously stores (or updates) a shared password for a website.
 - (void)setSharedPassword:(NSString *)password forAccount:(NSString *)account completion:(void (^)(NSError *error))completion
 {
     NSString *domain = self.server.host;
     if (domain.length > 0) {
+        // The password to be stored. Pass NULL to remove a shared password if it exists.
         SecAddSharedWebCredential((__bridge CFStringRef)domain, (__bridge CFStringRef)account, (__bridge CFStringRef)password, ^(CFErrorRef error) {
             if (completion) {
                 completion((__bridge NSError *)error);
@@ -1067,6 +1088,7 @@ static NSString *_defaultService;
     });
 }
 
+/// 返回一个随机的密码
 + (NSString *)generatePassword
 {
     return (NSString *)CFBridgingRelease(SecCreateSharedWebCredentialPassword());
@@ -1096,7 +1118,16 @@ static NSString *_defaultService;
 }
 
 #pragma mark -
+/// kSecClass:kSecClassGenericPassword
+/// kSecAttrService
+/// kSecAttrAccessGroup
 
+/// kSecClass:kSecClassInternetPassword
+/// kSecAttrServer
+/// kSecAttrPort
+/// kSecAttrProtocol
+/// kSecAttrAuthenticationType
+/// kSecUseOperationPrompt
 - (NSMutableDictionary *)query
 {
     NSMutableDictionary *query = [[NSMutableDictionary alloc] init];
@@ -1143,7 +1174,8 @@ static NSString *_defaultService;
     
     return query;
 }
-
+/// kSecAttrAccount:key
+/// kSecValueData:value
 - (NSMutableDictionary *)attributesWithKey:(NSString *)key value:(NSData *)value error:(NSError *__autoreleasing *)error
 {
     NSMutableDictionary *attributes;
@@ -1166,6 +1198,7 @@ static NSString *_defaultService;
     if (_authenticationPolicy && accessibilityObject) {
         if (floor(NSFoundationVersionNumber) > floor(iOS_7_1_or_10_9_2)) { // iOS 8+ or OS X 10.10+
             CFErrorRef securityError = NULL;
+            // Creates a new access control object with the specified on protection type and flags.
             SecAccessControlRef accessControl = SecAccessControlCreateWithFlags(kCFAllocatorDefault, accessibilityObject, (SecAccessControlCreateFlags)_authenticationPolicy, &securityError);
             if (securityError) {
                 NSError *e = (__bridge NSError *)securityError;
